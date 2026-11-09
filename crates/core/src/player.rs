@@ -4,7 +4,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::engine::{EngineEvent, EngineInfo, LoadId, PlayerEngine};
+use crate::engine::{EngineEvent, EngineInfo, LoadId, PlayerEngine, VideoSize};
 use crate::media::{MediaItem, OpenError, validate_local_file};
 
 /// Volume a new player starts with.
@@ -81,6 +81,7 @@ pub struct Player {
     resume_after_load: bool,
     position: Duration,
     duration: Option<Duration>,
+    video: Option<VideoSize>,
     volume: f32,
     muted: bool,
     error: Option<PlayerError>,
@@ -98,6 +99,7 @@ impl Player {
             resume_after_load: true,
             position: Duration::ZERO,
             duration: None,
+            video: None,
             volume: DEFAULT_VOLUME,
             muted: false,
             error: None,
@@ -118,6 +120,11 @@ impl Player {
 
     pub fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    /// Size of the current picture; `None` for audio-only media or when nothing plays.
+    pub fn video(&self) -> Option<VideoSize> {
+        self.video
     }
 
     pub fn volume(&self) -> f32 {
@@ -194,6 +201,7 @@ impl Player {
                 self.media = Some(item);
                 self.position = Duration::ZERO;
                 self.duration = None;
+                self.video = None;
                 self.error = None;
             }
             Err(err) => {
@@ -212,6 +220,7 @@ impl Player {
         self.load_id = None;
         self.position = Duration::ZERO;
         self.duration = None;
+        self.video = None;
     }
 
     fn play(&mut self) {
@@ -260,6 +269,7 @@ impl Player {
             self.state = PlaybackState::Stopped;
             self.load_id = None;
             self.position = Duration::ZERO;
+            self.video = None;
         }
     }
 
@@ -305,11 +315,29 @@ impl Player {
                     self.position = self.clamp_to_duration(position);
                 }
             }
+            // Before `Loaded` these may still describe the previous file.
+            EngineEvent::DurationChanged(duration) => {
+                if matches!(self.state, PlaybackState::Playing | PlaybackState::Paused) {
+                    self.duration = duration;
+                    self.position = self.clamp_to_duration(self.position);
+                }
+            }
+            // Engines may report the picture before `Loaded`, so keep it while loading;
+            // stale sizes are cleared by the engine's own `None` for the old file.
+            EngineEvent::VideoChanged(video) => {
+                if matches!(
+                    self.state,
+                    PlaybackState::Loading | PlaybackState::Playing | PlaybackState::Paused
+                ) {
+                    self.video = video;
+                }
+            }
             EngineEvent::Ended { id } => {
                 if self.load_id == Some(id)
                     && matches!(self.state, PlaybackState::Playing | PlaybackState::Paused)
                 {
                     self.state = PlaybackState::Ended;
+                    self.video = None;
                     if let Some(duration) = self.duration {
                         self.position = duration;
                     }
@@ -337,7 +365,7 @@ mod tests {
 
     use super::*;
     use crate::engine::EngineError;
-    use EngineEvent::{Ended, Failed, Loaded, Position};
+    use EngineEvent::{DurationChanged, Ended, Failed, Loaded, Position, VideoChanged};
     use PlayerCommand::*;
 
     #[derive(Debug, Clone, PartialEq)]
@@ -732,5 +760,93 @@ mod tests {
             f.calls(),
             [Call::Muted(true), Call::Volume(0.5), Call::Muted(false)]
         );
+    }
+
+    const HD: VideoSize = VideoSize {
+        width: 1920,
+        height: 1080,
+    };
+
+    #[test]
+    fn video_size_follows_the_engine_while_a_file_is_active() {
+        let mut f = Fixture::playing();
+        f.emit(VideoChanged(Some(HD)));
+        assert_eq!(f.player.video(), Some(HD));
+        f.send(Pause);
+        f.emit(VideoChanged(None));
+        assert_eq!(f.player.video(), None);
+    }
+
+    #[test]
+    fn video_reported_while_loading_is_kept() {
+        let mut f = Fixture::new();
+        f.send(Open(file()));
+        f.emit(VideoChanged(Some(HD)));
+        f.emit(Loaded {
+            id: LoadId(1),
+            duration: Some(secs(60)),
+        });
+        assert_eq!(f.player.video(), Some(HD));
+    }
+
+    #[test]
+    fn video_is_cleared_by_stop_end_and_a_new_load() {
+        let mut stopped = Fixture::playing();
+        stopped.emit(VideoChanged(Some(HD)));
+        stopped.send(Stop);
+        assert_eq!(stopped.player.video(), None);
+
+        let mut ended = Fixture::playing();
+        ended.emit(VideoChanged(Some(HD)));
+        ended.emit(Ended { id: LoadId(1) });
+        assert_eq!(ended.player.video(), None);
+
+        let mut reloaded = Fixture::playing();
+        reloaded.emit(VideoChanged(Some(HD)));
+        reloaded.send(Open(other_file()));
+        assert_eq!(reloaded.player.video(), None);
+    }
+
+    #[test]
+    fn video_events_without_an_active_file_are_ignored() {
+        let mut idle = Fixture::new();
+        idle.emit(VideoChanged(Some(HD)));
+        assert_eq!(idle.player.video(), None);
+
+        let mut stopped = Fixture::playing();
+        stopped.send(Stop);
+        stopped.emit(VideoChanged(Some(HD)));
+        assert_eq!(stopped.player.video(), None);
+    }
+
+    #[test]
+    fn duration_updates_after_loading_are_applied() {
+        let mut f = Fixture::new();
+        f.send(Open(file()));
+        f.emit(Loaded {
+            id: LoadId(1),
+            duration: None,
+        });
+        assert!(!f.player.is_seekable());
+        f.emit(DurationChanged(Some(secs(90))));
+        assert_eq!(f.player.duration(), Some(secs(90)));
+        assert!(f.player.is_seekable());
+    }
+
+    #[test]
+    fn duration_reported_while_loading_is_ignored() {
+        let mut f = Fixture::playing();
+        f.send(Open(other_file()));
+        // Still describes the previous file.
+        f.emit(DurationChanged(Some(secs(5))));
+        assert_eq!(f.player.duration(), None);
+    }
+
+    #[test]
+    fn a_shorter_duration_clamps_the_position() {
+        let mut f = Fixture::playing();
+        f.emit(Position(secs(40)));
+        f.emit(DurationChanged(Some(secs(30))));
+        assert_eq!(f.player.position(), secs(30));
     }
 }

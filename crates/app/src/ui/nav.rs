@@ -1,8 +1,8 @@
 //! The navigation pane.
 
 use eframe::egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Layout, Rect, Response, RichText, Role, Sense,
-    Ui, Vec2, WidgetInfo, pos2, vec2,
+    Align, Align2, Button, Color32, CornerRadius, FontId, Layout, Rect, Response, RichText, Role,
+    Sense, Ui, Vec2, WidgetInfo, pos2, vec2,
 };
 
 use super::icons::{self, Icon};
@@ -55,11 +55,17 @@ impl Route {
     }
 }
 
-pub fn show(ui: &mut Ui, route: &mut Route) {
+/// Draws the pane. Returns `true` when the user asked to open a file.
+pub fn show(ui: &mut Ui, route: &mut Route) -> bool {
     let tokens = theme::tokens(ui);
     ui.add_space(tokens.spacing.lg);
     brand(ui);
     ui.add_space(tokens.spacing.lg);
+    let open = ui
+        .add_sized([ui.available_width(), 32.0], Button::new("Open file…"))
+        .on_hover_text("Open an audio or video file (Ctrl+O)")
+        .clicked();
+    ui.add_space(tokens.spacing.md);
     for destination in Route::PRIMARY {
         if item(ui, destination, *route == destination).clicked() {
             *route = destination;
@@ -71,6 +77,7 @@ pub fn show(ui: &mut Ui, route: &mut Route) {
             *route = Route::Settings;
         }
     });
+    open
 }
 
 fn brand(ui: &mut Ui) {

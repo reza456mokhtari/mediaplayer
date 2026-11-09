@@ -2,8 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use eframe::egui;
-use mediaplayer_app::{APP_NAME, MediaPlayerApp, cli};
-use mediaplayer_core::{NullEngine, Player};
+use mediaplayer_app::{APP_NAME, MediaPlayerApp, backend, cli};
+use mediaplayer_core::Player;
 
 fn main() -> eframe::Result {
     env_logger::init();
@@ -37,8 +37,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         APP_NAME,
         options,
-        Box::new(move |_creation_context| {
-            let mut app = MediaPlayerApp::new(Player::new(Box::new(NullEngine::new())));
+        Box::new(move |creation_context| {
+            // The GL context is current here, which libmpv's renderer needs.
+            let backend = backend::start(creation_context);
+            let mut app = MediaPlayerApp::new(Player::new(backend.engine))
+                .with_backend(backend.status, backend.video);
             if let Some(file) = files.into_iter().next() {
                 app.open(file);
             }

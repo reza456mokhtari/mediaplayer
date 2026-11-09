@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/app"]
+members = ["crates/core", "crates/mpv", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ repository = "https://github.com/reza456mokhtari/mediaplayer"
 
 [workspace.dependencies]
 mediaplayer-core = { path = "crates/core" }
+mediaplayer-mpv = { path = "crates/mpv" }
 
 # glow (OpenGL) instead of eframe's default wgpu renderer: libmpv's render API
 # targets OpenGL. See docs/adr/0001-ui-stack-egui-glow.md.
@@ -24,10 +25,15 @@ eframe = { version = "0.37", default-features = false, features = [
 ] }
 egui_kittest = "0.37"
 env_logger = { version = "0.11", default-features = false }
+# Must match the glow version eframe uses: VideoOutput::paint takes eframe's `glow::Context`.
+glow = "0.17"
+libloading = "0.9"
 log = "0.4"
+# xdg-portal only: the default `wayland` feature isn't needed, and GTK would need system headers.
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
 
 [workspace.lints.rust]
-# deny (not forbid) so the slice 2 libmpv FFI module can opt in with a scoped allow.
+# Only crates/mpv (libmpv FFI and OpenGL) opts back in, per module.
 unsafe_code = "deny"
 unused_qualifications = "warn"
 

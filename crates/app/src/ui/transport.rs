@@ -1,20 +1,23 @@
 //! The transport bar: a seek row above track info, playback buttons and volume.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui::{
-    Align, Label, Layout, Rect, RichText, Role, Sense, Slider, Ui, UiBuilder, WidgetInfo, pos2,
-    vec2,
+    Align, Label, Layout, Rect, RichText, Role, Sense, Slider, Ui, UiBuilder, Vec2, WidgetInfo,
+    pos2, vec2,
 };
 use mediaplayer_core::{PlaybackState, Player, PlayerCommand, format_timestamp};
+use mediaplayer_mpv::VideoOutput;
 
 use super::icons::Icon;
-use super::widgets;
+use super::{video, widgets};
 use crate::theme;
 
 /// Outer height of the bar, including its frame margin.
 pub const HEIGHT: f32 = 116.0;
 
+const ARTWORK: f32 = 48.0;
 const BUTTON: f32 = 36.0;
 const PLAY_BUTTON: f32 = 44.0;
 const TIME_WIDTH: f32 = 52.0;
@@ -27,11 +30,17 @@ pub struct TransportOutput {
     pub show_now_playing: bool,
 }
 
-/// Draws the bar. `scrub` holds the seek position while the handle is held down.
-pub fn show(ui: &mut Ui, player: &Player, scrub: &mut Option<f64>) -> TransportOutput {
+/// Draws the bar. `scrub` holds the seek position while the handle is held down;
+/// `thumbnail` replaces the artwork with the playing video.
+pub fn show(
+    ui: &mut Ui,
+    player: &Player,
+    scrub: &mut Option<f64>,
+    thumbnail: Option<&Arc<VideoOutput>>,
+) -> TransportOutput {
     let mut output = TransportOutput::default();
     seek_row(ui, player, scrub, &mut output.commands);
-    controls_row(ui, player, &mut output);
+    controls_row(ui, player, thumbnail, &mut output);
     output
 }
 
@@ -61,7 +70,7 @@ fn seek_row(
         let response = ui
             .add_enabled(player.is_seekable(), slider)
             .accessible_name("Seek")
-            .on_hover_text("Seek: ← / → 5 s, Shift+← / → 30 s");
+            .on_hover_text("Seek: Left/Right 5 s, Shift+Left/Right 30 s");
         // Seek once on release rather than on every drag step.
         if response.is_pointer_button_down_on() {
             *scrub = Some(value);
@@ -84,7 +93,12 @@ fn time_label(ui: &mut Ui, text: &str, layout: Layout) {
     });
 }
 
-fn controls_row(ui: &mut Ui, player: &Player, output: &mut TransportOutput) {
+fn controls_row(
+    ui: &mut Ui,
+    player: &Player,
+    thumbnail: Option<&Arc<VideoOutput>>,
+    output: &mut TransportOutput,
+) {
     let tokens = theme::tokens(ui);
     let gap = tokens.spacing.sm;
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::hover());
@@ -101,7 +115,7 @@ fn controls_row(ui: &mut Ui, player: &Player, output: &mut TransportOutput) {
 
     let zone = |rect: Rect, layout: Layout| UiBuilder::new().max_rect(rect).layout(layout);
     ui.scope_builder(zone(left, Layout::left_to_right(Align::Center)), |ui| {
-        track_info(ui, player, output);
+        track_info(ui, player, thumbnail, output);
     });
     ui.scope_builder(zone(cluster, Layout::left_to_right(Align::Center)), |ui| {
         ui.spacing_mut().item_spacing.x = gap;
@@ -112,9 +126,23 @@ fn controls_row(ui: &mut Ui, player: &Player, output: &mut TransportOutput) {
     });
 }
 
-fn track_info(ui: &mut Ui, player: &Player, output: &mut TransportOutput) {
+fn track_info(
+    ui: &mut Ui,
+    player: &Player,
+    thumbnail: Option<&Arc<VideoOutput>>,
+    output: &mut TransportOutput,
+) {
     let tokens = theme::tokens(ui);
-    let artwork = widgets::artwork(ui, 48.0, Sense::click());
+    let artwork = match thumbnail {
+        // Drawing the video here also keeps libmpv's frames flowing while Now
+        // Playing is hidden; its renderer stalls if nobody draws.
+        Some(video) => {
+            let (rect, response) = ui.allocate_exact_size(Vec2::splat(ARTWORK), Sense::click());
+            video::show(ui, rect, video);
+            response
+        }
+        None => widgets::artwork(ui, ARTWORK, Sense::click()),
+    };
     artwork.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Show Now Playing"));
     if artwork.on_hover_text("Show Now Playing").clicked() {
         output.show_now_playing = true;
@@ -194,7 +222,7 @@ fn volume_controls(ui: &mut Ui, player: &Player, commands: &mut Vec<PlayerComman
         .show_value(false)
         .trailing_fill(true);
     let response = ui.add(slider).accessible_name("Volume");
-    let response = response.on_hover_text(format!("Volume {percent:.0}% (↑ / ↓)"));
+    let response = response.on_hover_text(format!("Volume {percent:.0}% (Up/Down)"));
     if response.changed() {
         commands.push(PlayerCommand::SetVolume(percent / 100.0));
     }

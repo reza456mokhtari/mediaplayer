@@ -19,14 +19,22 @@ crates/
     null_engine.rs   NullEngine (simulated playback) + Clock / ManualClock
     media.rs         validate_local_file, MediaItem
     time.rs          format_timestamp
+  mpv/    mediaplayer-mpv    libmpv engine; the only crate allowed `unsafe`
+    library.rs       runtime loading from trusted folders, client API version check
+    ffi.rs           client and render API declarations
+    handle.rs        safe wrapper around mpv_handle (options, commands, properties, events)
+    events.rs        mpv events -> EngineEvent
+    engine.rs        MpvEngine (PlayerEngine) and the hardened option table
+    video.rs         VideoOutput: render API -> FBO -> blit in an egui paint callback
   app/    mediaplayer-app    egui shell, binary `mediaplayer`
-    app.rs           panels, routing, input plumbing (drops, hotkeys, commands)
+    app.rs           panels, routing, input plumbing (drops, hotkeys, Ctrl+O, commands)
+    backend.rs       libmpv, or NullEngine plus a user-facing reason, at startup
+    file_dialog.rs   native Open dialog (rfd; xdg-portal on Linux)
     theme.rs         design tokens -> egui Style, dark + light
     hotkeys.rs       shortcut table
     cli.rs           argument parsing
-    ui/              nav, now_playing, transport, pages, info_bar, widgets, icons
+    ui/              nav, now_playing, transport, video, pages, info_bar, widgets, icons
 planned:
-  mpv/              slice 2: libmpv engine (runtime-loaded, OpenGL render API)
   library/          slice 4: folder scanner + SQLite index
 ```
 
@@ -40,7 +48,7 @@ PlayerEngine::poll_events ──► Player::tick ──► Player state ──�
 Rules:
 
 - `core` never depends on egui; every player rule is testable without a window.
-- The UI never talks to an engine directly; it sends `PlayerCommand`s and reads `Player` state.
+- The UI never controls an engine directly; it sends `PlayerCommand`s and reads `Player` state. The one engine object it holds is `VideoOutput`, which draws frames and has no playback controls.
 - Engines only receive absolute paths to regular files that passed `validate_local_file`.
 - Nothing panics on user input. Failures become a `PlayerError` that the UI shows and the user can dismiss.
 
@@ -50,8 +58,8 @@ Rules:
 |---|---|---|
 | 0 | Workspace, egui shell window, navigation placeholders, theme tokens, empty Now Playing, transport chrome | Done |
 | 1 | `PlayerEngine` trait, simulated `NullEngine`, `Player` state machine (TDD), transport and keyboard wired to state | Done |
-| 2 | libmpv engine: runtime DLL loading, OpenGL render API into an egui texture, open-file dialog, real play/pause/seek/volume | Next |
-| 3 | Play queue: add/remove/reorder, open folder, M3U save/load, previous/next, repeat | |
+| 2 | libmpv engine: runtime DLL loading, OpenGL render API drawn in an egui paint callback, open-file dialog, real play/pause/seek/volume | Done on Linux with libmpv 0.37 (see `NOTES.md`); Windows build checked, Windows playback not yet run |
+| 3 | Play queue: add/remove/reorder, open folder, M3U save/load, previous/next, repeat | Next (proposed below) |
 | 4 | Library scan on a background thread, SQLite index, durations, search | |
 | 5 | Fullscreen video, external `.srt` and embedded subtitle/audio tracks, playback speed, A-B loop | |
 | 6 | Network streams, persisted settings, configurable hotkeys, README licenses and limits | |
@@ -65,17 +73,26 @@ See [ADR 0003](adr/0003-libmpv-runtime-loading.md) for the decision and its secu
 - Load `libmpv-2.dll` / `libmpv.so.2` / `libmpv.2.dylib` at runtime with `libloading`. On Windows, load only from the executable's folder or System32 (`LoadLibraryExW` search flags), never from the working directory.
 - If loading fails, start with `NullEngine` and show why in the error bar and in Settings.
 - Map mpv to `EngineEvent`: `MPV_EVENT_FILE_LOADED` → `Loaded`, observed `time-pos` → `Position`, `MPV_EVENT_END_FILE` with reason EOF → `Ended`, with reason error → `Failed`. Use the playlist entry id as `LoadId`.
-- Render video with `MPV_RENDER_API_TYPE_OPENGL` into an FBO, show it as an egui texture, and request repaints from mpv's update callback.
+- Render video with `MPV_RENDER_API_TYPE_OPENGL` into an FBO and blit it into egui's framebuffer from a paint callback; request repaints from mpv's update callback ([ADR 0004](adr/0004-video-output.md), which also explains the scaler options).
 - Add an open-file dialog (`rfd`) and `Ctrl+O`.
 - Tests: the existing `Player` suite stays engine-agnostic. Add an mpv smoke test that's skipped when the library is missing, plus a manual checklist for mp4/mkv/mp3.
+
+## Slice 3 outline (proposed, not started)
+
+- `PlayQueue` in `mediaplayer-core`, TDD first: add, remove, move, clear, current index, next/previous, repeat off/one/all. Items are validated `MediaItem`s.
+- `Player` integration: `Ended` advances according to the repeat mode. Previous restarts the track after the first few seconds and goes back before that.
+- Open folder: a non-recursive scan for the media extensions the Open dialog uses, sorted naturally, with each file validated like any other.
+- M3U/M3U8 load and save: local entries only, with relative paths resolved against the playlist's folder. Cap the input size and entry count, skip URLs and other schemes until slice 6, and parse `#EXTINF` leniently.
+- UI: the Play queue page (list, reorder, remove), working Previous/Next/Repeat, and a multi-file drop that queues every file.
+- Security review: playlist parsing limits and hostile input tests; folder scans don't follow links.
 
 ## Acceptance tracking
 
 | Criterion | Slice | Status |
 |---|---|---|
-| `cargo build` works on Windows | 0 | Cross-compiled (`x86_64-pc-windows-gnu`) and `cargo check` for MSVC in the sandbox; native MSVC build runs in CI |
-| Open local mp4/mkv/mp3 and play | 2 | Simulated playback only (NullEngine) |
-| Play/pause/seek/volume from UI and keyboard | 1 → 2 | Wired and tested against the simulated engine |
+| `cargo build` works on Windows | 0 | Cross-compiled (`x86_64-pc-windows-gnu` release) and `cargo check` + `clippy -D warnings` for MSVC in the sandbox, slice 2 included; native MSVC build and tests run in CI |
+| Open local mp4/mkv/mp3 and play | 2 | Done with libmpv 0.37 on Linux: MP4 (H.264/AAC), MKV (VP9/Opus) and MP3 play, with the picture in the window. Not yet run on Windows; audible output not checked (no audio device in the sandbox) |
+| Play/pause/seek/volume from UI and keyboard | 1 → 2 | Done: UI tests against the simulated engine, plus real key presses against libmpv (pause, seek, volume, mute) |
 | Playlist add/remove/reorder | 3 | |
 | Library scan with durations | 4 | |
 | Fullscreen video | 5 | |

@@ -94,3 +94,145 @@ size limits on M3U input and keeping remote playlists from referencing local fil
   the default yet when GitHub processed that push. Pushing the default branch a
   second time registers it, and the first Windows and Linux run is started by hand.
 - CI jobs now time out after 45 minutes instead of GitHub's default of 6 hours.
+
+## 2026-11-09: Slice 2 (libmpv)
+
+### Decisions
+
+- **D8** libmpv is loaded at runtime from trusted folders only. [ADR 0003](docs/adr/0003-libmpv-runtime-loading.md)
+  is now accepted and matches the code (option table, `keep-open=no`, System32
+  fallback, logging of the loaded DLL).
+- **D9** Video: libmpv's OpenGL render API draws into our FBO, and an egui paint
+  callback blits it into egui's framebuffer ([ADR 0004](docs/adr/0004-video-output.md)).
+  The plan said "egui texture"; the blit avoids re-registering a texture on every
+  resize.
+- **D10** Scalers are `catmull_rom` with `correct-downscaling=no`, which avoids a
+  libmpv bug that blanks the picture (investigation below, ADR 0004).
+- **D11** New dependencies: libloading 0.9 (ISC), glow 0.17 (MIT OR Apache-2.0 OR
+  Zlib; the version eframe uses) and rfd 0.18 (MIT; `xdg-portal` only, so Linux
+  builds need no GTK headers). The build still needs no libmpv and no system packages.
+- **D12** `mediaplayer-core` gained `DurationChanged` and `VideoChanged` events, so
+  the UI can show the duration and size the video area. It still has no dependencies.
+
+### Security review: libmpv and the Open dialog
+
+| Surface | Handling | Covered by |
+|---|---|---|
+| DLL loading (Windows) | Absolute path next to the exe, `LoadLibraryExW` with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR \| LOAD_LIBRARY_SEARCH_SYSTEM32`, then System32 only; never the current directory or `PATH`. The loaded path is logged | `library` tests (candidate names), MSVC clippy. Not run on Windows yet |
+| Library version | Refused unless the client API major version is 2 | `library` tests |
+| mpv configuration | `config`, `load-scripts`, `ytdl` and `access-references` off, all required; no IPC server or script options anywhere in the table | `engine` tests |
+| Nested opens | `access-references=no` makes FFmpeg's nested opens fail (checked in mpv 0.37's `demux_lavf.c`: `block_io_open`), so a local HLS or playlist file can't reach the network | Source review |
+| Paths into libmpv | Validated absolute paths only, as one `loadfile` argument (never parsed from a string); raw bytes on Unix, UTF-8 on Windows; NUL bytes rejected | `engine` tests, smoke tests |
+| FFI | `unsafe` only in `crates/mpv`, each block with a `SAFETY:` comment (clippy `undocumented_unsafe_blocks`). Callbacks only wake the UI. The render context is freed before the core, with the GL context current | clippy, review |
+| Open dialog | Native dialog (rfd; the desktop portal on Linux); the chosen file is validated like any other | UI tests for the button and Ctrl+O |
+| Logging | libmpv warnings and errors go to `log` (stderr, local only), and mpv messages can include the file being played | n/a |
+
+### Investigation: black video
+
+- **Symptom:** libmpv loaded and delivered frames, but under Xvfb with Mesa
+  llvmpipe the video area stayed black for a whole run in most runs. The other
+  runs were fine throughout.
+- **Ruled out** (batches of 4 parallel runs; black runs in brackets): baseline
+  (3/4, repeatedly), Mesa shader cache off (3/4), `LP_NUM_THREADS=0` (4/4),
+  `vd-lavc-dr=no` (1/4), `hwdec=no` (2/4). Rendering into the default
+  framebuffer instead of our FBO was black in black runs too (4/4), so the FBO
+  wasn't the cause. An earlier note blaming the FBO came from one run that
+  happened to be fine.
+- mpv's `debug` logs were line-for-line identical in black and colour runs.
+- **apitrace:** the GL calls and arguments were identical through the first frame.
+  The one difference was the contents of an 8 KiB upload: the 2×256 RGBA16F weight
+  table of the 6-tap chroma scaler. Its padding (taps 6 and 7 of each row) held
+  NaN in the black run and other garbage in the colour run. In the black run, the
+  rows the chroma pass samples (63/64 and 191/192) had NaN in the padding.
+- **Cause:** a libmpv bug. `reinit_scaler` allocates the table uninitialised and
+  `mp_compute_lut` fills only the real taps; mpv master still does this. Linear
+  filtering mixes the padding texel in with weight 0, `0 × NaN = NaN` reaches the
+  weights that are used, and the whole frame turns black. Details in ADR 0004.
+- **Fix:** `catmull_rom` for `scale`, `cscale` and `dscale` (4 taps, no padding),
+  plus `correct-downscaling=no`. The temporary diagnostic code was removed.
+
+### Verification: slice 2
+
+- **TDD red:** `scalers_use_kernels_without_lut_padding` failed ("option scale is
+  not set"). **Green** after adding the options.
+- `cargo fmt --all --check`: pass. `cargo clippy --workspace --all-targets -- -D warnings`: pass.
+- `cargo test --workspace`: 82 passed, 0 failed, 4 ignored (core 43 + 1
+  integration, app 6 + 11 UI wiring, mpv 21).
+- `cargo test -p mediaplayer-mpv -- --ignored` against Ubuntu's libmpv 0.37: 4
+  passed. These cover libmpv accepting the scaler options; play, pause, seek and
+  finish; an undecodable file reporting an error; and a quick second open.
+- Windows: `cargo check` and `cargo clippy --workspace --all-targets -- -D warnings`
+  for `x86_64-pc-windows-msvc` pass, covering the `LoadLibraryExW` and UTF-8 path
+  code. `cargo build --release --target x86_64-pc-windows-gnu` produces a PE32+ GUI
+  `mediaplayer.exe`.
+- **Video**, Xvfb + llvmpipe, 4 parallel runs at a time:
+  - Before the fix, most runs were black.
+  - After it, 16 of 16 runs showed the picture: 8 MP4 (H.264 720p, AAC) and 8 MKV
+    (VP9 640×480, Opus). The centre of the video area measured 0.507–0.509 mean
+    brightness, against 0.000 for a black run.
+  - Screenshots show 16:9 letterboxed and 4:3 pillarboxed, both upright, and the
+    test pattern's burned-in clock matches the seek bar.
+- **Controls**, real key presses (xdotool) against libmpv:
+  - Space pauses: two screenshots 2 s apart are pixel-identical. Space again resumes.
+  - Shift+→ seeks from 0:04 to 0:36. ↓×3 lowers the volume. M shows the muted icon.
+  - No libmpv command failures in the logs.
+- **MP3:** the audio-only Now Playing view appears, the clock advances, and
+  libmpv reports the 0:30 duration.
+
+**Not verified here:**
+
+- Audible output. The sandbox has no audio device, so libmpv used its null output (`audio-fallback-to-null`).
+- Windows at runtime: loading `libmpv-2.dll`, playback and hardware decoding. CI builds and tests on `windows-latest`, without libmpv.
+- Real GPUs. Only Mesa llvmpipe was available.
+
+### Pre-merge review
+
+- An independent review of `crates/mpv` found a bug: replacing a video with
+  another of the same size could leave the player audio-only for the whole file.
+  - Cause: libmpv coalesces property changes (client.h), so it may never report
+    `dwidth`/`dheight` for the new file, while the player forgets the picture on
+    every open.
+  - Confirmed with a ctypes probe against libmpv 0.37. Reloading the same file
+    after 0.6 s without polling sent no `dwidth`/`dheight` change, but it did send
+    `VIDEO_RECONFIG`, and `dwidth` read as a double returned 1280.
+  - Fix: the engine reads `dwidth`/`dheight` on every `VIDEO_RECONFIG`, and the
+    event mapper reports the size afresh for each file.
+  - TDD: two mapper tests failed (`left: None`), then passed.
+- Reopening the same 720p file in the app through Ctrl+O (zenity under Xvfb):
+  - With the fix, the picture returned in both valid runs.
+  - The one valid pre-fix run showed it too: in the app, the UI usually polls
+    between the two files, so the race is rare there. The unit tests and the probe
+    are the deterministic evidence.
+- Closing the window during playback now has a test; earlier runs were always
+  killed, which skips `on_exit`. MP4 on Now Playing, MP4 in the transport-bar
+  thumbnail, MP3, and closing after a failed Ctrl+O all exit with status 0 in
+  0.1–0.3 s, with no renderer-leak warning.
+- On Linux without a desktop portal or zenity, Ctrl+O fails quietly (it's logged)
+  and the UI stays responsive. The README now says so. rfd loads libdbus at
+  runtime, so the build still needs no system packages.
+- `cargo test --workspace`: 84 passed, 0 failed, 4 ignored. The 4 ignored libmpv
+  tests pass when run. Clippy `-D warnings` passes for Linux and for
+  `x86_64-pc-windows-msvc`.
+
+### Improve before slice 3
+
+- Keep libmpv's render loop serviced whenever a video file is active. Until the
+  video size is known it isn't, so libmpv waits 200 ms and drops the first frame.
+- libmpv's hardware-decoding and audio probing failures (CUDA, VA-API, ALSA, JACK)
+  arrive as ERROR logs even when playback works. Demote or summarise known probe noise.
+- `set_volume` unmutes on any change while muted, including lowering the volume,
+  but the test is called "raising the volume unmutes". Decide which is intended.
+- Report the uninitialised scaler padding upstream (mpv `video/out/gpu/video.c`),
+  then version-gate the workaround.
+- Run the ignored libmpv tests on Windows CI against a pinned, checksummed `libmpv-2.dll`.
+- `MpvEngine::create_video_output`, `VideoOutput::paint` and `VideoOutput::destroy`
+  are safe functions with OpenGL requirements the compiler can't check:
+  - the creating context must be current;
+  - `get_proc_address` must return real GL functions.
+
+  Breaking them is undefined behaviour (render.h). The app meets them. Marking them
+  `unsafe` would push `unsafe` into the app, so instead move the egui paint
+  callback and the context handling into `crates/mpv`.
+- The libmpv callback wrappers don't catch panics, so a panicking closure aborts
+  the process. That's defined behaviour, but abrupt. Add `catch_unwind` along with
+  the change above.

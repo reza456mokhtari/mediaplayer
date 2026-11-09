@@ -16,6 +16,8 @@ eframe.workspace = true
 env_logger.workspace = true
 log.workspace = true
 mediaplayer-core.workspace = true
+mediaplayer-mpv.workspace = true
+rfd.workspace = true
 
 # Turning off eframe's default features (to drop wgpu) also drops winit's
 # runtime-loaded Wayland support, and accesskit still enables Wayland, so

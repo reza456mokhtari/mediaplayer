@@ -1,6 +1,6 @@
 # ADR 0003: Load libmpv at runtime, from trusted folders only
 
-- Status: Proposed (implemented in slice 2)
+- Status: Accepted (implemented in slice 2)
 - Date: 2026-11-09
 
 ## Context
@@ -17,20 +17,29 @@ and the app would fail to start without the DLL.
   Windows, `libmpv.so.2` on Linux, `libmpv.2.dylib` on macOS. Resolve only the
   client and render API functions we use. Refuse to continue unless
   `mpv_client_api_version()` reports major version 2.
-- **Windows DLL search hardening:** load by absolute path from the executable's
-  folder with `LoadLibraryExW` and
-  `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`, so the
-  current directory and `PATH` are never searched (DLL planting). Log the
-  resolved path.
+- **Windows DLL search hardening:** load `libmpv-2.dll` (or the older name
+  `mpv-2.dll`) by absolute path from the executable's folder with
+  `LoadLibraryExW` and `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`,
+  so the current directory and `PATH` are never searched (DLL planting). If
+  neither file is there, try `libmpv-2.dll` from System32 only. Log which file
+  was loaded.
 - If loading fails, the app still starts with `NullEngine` and says why (error
   bar and Settings), plus where to put the DLL.
-- **mpv hardening:** `config=no` (ignore a user's mpv.conf), `load-scripts=no`
-  (no Lua/JS scripts), `ytdl=no` (never spawn yt-dlp), `input-default-bindings=no`,
-  `input-vo-keyboard=no`, `osc=no`, `vo=libmpv`, `keep-open=yes`,
-  `hwdec=auto-safe`. Network protocols stay off until slice 6 adds an explicit
-  URL allowlist.
-- Only absolute local paths reach `loadfile` (ADR 0002). That keeps local names
-  from being read as mpv protocols such as `edl://` or `av://`.
+- **mpv hardening** (`OPTIONS` in `crates/mpv/src/engine.rs`). These are
+  required, and startup fails if libmpv rejects one: `config=no` (ignore a user's
+  mpv.conf), `load-scripts=no` (no Lua/JS scripts), `ytdl=no` (never spawn
+  yt-dlp), `access-references=no` (don't follow playlists, EDL files, archives
+  or ordered chapters inside a file), `idle=yes` and `vo=libmpv`. These are
+  best-effort, because not every mpv version has them: `input-default-bindings=no`,
+  `input-vo-keyboard=no`, `osc=no`, built-in scripts off, `keep-open=no` (the
+  player needs `END_FILE` when a file finishes), `hwdec=auto-safe`,
+  `audio-fallback-to-null=yes` and the scaler options from ADR 0004. No IPC
+  server is ever configured.
+- Only absolute local paths reach `loadfile` (ADR 0002), passed as one argument
+  of a command array, never parsed from a string. That keeps local names from
+  being read as mpv protocols such as `edl://` or `av://`. Together with
+  `access-references=no`, nothing reaches the network; slice 6 adds URLs behind
+  an explicit allowlist.
 
 ## Consequences
 

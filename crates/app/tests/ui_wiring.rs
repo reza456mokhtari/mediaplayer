@@ -6,6 +6,7 @@ use std::time::Duration;
 use eframe::egui::{self, Key, Modifiers, Role};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use mediaplayer_app::backend::BackendStatus;
 use mediaplayer_app::{MediaPlayerApp, Route};
 use mediaplayer_core::{ManualClock, NullEngine, PlaybackState, Player};
 
@@ -15,14 +16,21 @@ fn existing_file() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")
 }
 
-fn harness(clock: &ManualClock) -> Harness<'static, MediaPlayerApp> {
+fn app(clock: &ManualClock) -> MediaPlayerApp {
     let engine = NullEngine::with_clock(Box::new(clock.clone()), TRACK);
-    let app = MediaPlayerApp::new(Player::new(Box::new(engine)));
+    MediaPlayerApp::new(Player::new(Box::new(engine)))
+}
+
+fn harness_for(app: MediaPlayerApp) -> Harness<'static, MediaPlayerApp> {
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1180.0, 740.0))
         .build_ui_state(|ui, app: &mut MediaPlayerApp| app.show(ui), app);
     harness.run();
     harness
+}
+
+fn harness(clock: &ManualClock) -> Harness<'static, MediaPlayerApp> {
+    harness_for(app(clock))
 }
 
 fn playing(clock: &ManualClock) -> Harness<'static, MediaPlayerApp> {
@@ -163,4 +171,53 @@ fn a_missing_file_shows_an_error_that_can_be_dismissed() {
     harness.run();
     assert!(harness.query_by_label_contains("File not found").is_none());
     assert!(harness.state().player().error().is_none());
+}
+
+#[test]
+fn the_open_file_button_requests_the_file_dialog() {
+    let mut harness = harness(&ManualClock::new());
+    assert!(!harness.state_mut().take_open_request());
+    harness
+        .get_by_role_and_label(Role::Button, "Open file…")
+        .click();
+    harness.run();
+    assert!(harness.state_mut().take_open_request());
+    assert!(
+        !harness.state_mut().take_open_request(),
+        "a request is taken once"
+    );
+}
+
+#[test]
+fn ctrl_o_requests_the_file_dialog() {
+    let mut harness = harness(&ManualClock::new());
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::O);
+    harness.run();
+    assert!(harness.state_mut().take_open_request());
+}
+
+#[test]
+fn a_backend_problem_shows_until_dismissed_and_stays_in_settings() {
+    const PROBLEM: &str = "libmpv-2.dll was not found next to mediaplayer.exe";
+    let status = BackendStatus {
+        problem: Some(PROBLEM.to_owned()),
+    };
+    let mut harness = harness_for(app(&ManualClock::new()).with_backend(status, None));
+    harness.get_by_label_contains(PROBLEM);
+
+    harness.get_by_label("Dismiss").click();
+    harness.run();
+    assert!(harness.query_by_label_contains(PROBLEM).is_none());
+
+    harness
+        .get_by_role_and_label(Role::Button, "Settings")
+        .click();
+    harness.run();
+    harness.get_by_label_contains(PROBLEM);
+}
+
+#[test]
+fn simulated_playback_points_to_settings() {
+    let harness = playing(&ManualClock::new());
+    harness.get_by_label_contains("Simulated playback: libmpv isn't loaded");
 }
