@@ -83,3 +83,14 @@ size limits on M3U input and keeping remote playlists from referencing local fil
 - On Windows, load Segoe UI Variable from the system when it's present (slice 7).
 - Persist theme and volume (slice 6).
 - Have `Player::tick` report whether state changed, so idle frames can skip work (performance pass).
+
+## 2026-11-09: Published to GitHub
+
+- Pushed `hoplite/kranioi-ff9b6477`. The repository was empty, so GitHub made
+  this branch the default. Renaming it to `main` (repository Settings → General →
+  Default branch) matches CI's `push` trigger.
+- The first push didn't register the CI workflow: the Actions API listed 0
+  workflows and `workflow_dispatch` returned 404. Presumably the branch wasn't
+  the default yet when GitHub processed that push. Pushing the default branch a
+  second time registers it, and the first Windows and Linux run is started by hand.
+- CI jobs now time out after 45 minutes instead of GitHub's default of 6 hours.
