@@ -1,0 +1,17 @@
+[package]
+name = "mediaplayer-mpv"
+description = "libmpv playback engine for mediaplayer, loaded at runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+glow.workspace = true
+libloading.workspace = true
+log.workspace = true
+mediaplayer-core.workspace = true
+
+[lints]
+workspace = true

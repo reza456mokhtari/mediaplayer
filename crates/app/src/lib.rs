@@ -1,7 +1,9 @@
 //! egui desktop shell for mediaplayer.
 
 pub mod app;
+pub mod backend;
 pub mod cli;
+pub mod file_dialog;
 pub mod hotkeys;
 pub mod theme;
 pub mod ui;

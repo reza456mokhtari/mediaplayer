@@ -10,7 +10,7 @@ pub mod null_engine;
 pub mod player;
 pub mod time;
 
-pub use engine::{EngineError, EngineEvent, EngineInfo, LoadId, PlayerEngine};
+pub use engine::{EngineError, EngineEvent, EngineInfo, LoadId, PlayerEngine, VideoSize};
 pub use media::{MediaItem, OpenError, validate_local_file};
 pub use null_engine::{Clock, DEFAULT_SIMULATED_DURATION, ManualClock, NullEngine, SystemClock};
 pub use player::{DEFAULT_VOLUME, PlaybackState, Player, PlayerCommand, PlayerError};

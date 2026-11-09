@@ -1,12 +1,24 @@
 //! The Now Playing page.
 
+use std::sync::Arc;
+
 use eframe::egui::{Label, RichText, Sense, Ui};
 use mediaplayer_core::{PlaybackState, Player};
+use mediaplayer_mpv::VideoOutput;
 
-use super::widgets;
+use super::{video, widgets};
 use crate::theme;
 
-pub fn show(ui: &mut Ui, player: &Player) {
+pub fn show(ui: &mut Ui, player: &Player, video: Option<&Arc<VideoOutput>>) {
+    if let Some(video) = video
+        && player.video().is_some()
+    {
+        let rect = ui.available_rect_before_wrap();
+        ui.allocate_rect(rect, Sense::hover());
+        video::show(ui, rect, video);
+        return;
+    }
+
     let tokens = theme::tokens(ui);
     let palette = tokens.palette;
     let height = ui.available_height();
@@ -24,16 +36,11 @@ pub fn show(ui: &mut Ui, player: &Player) {
             ui.add_space(tokens.spacing.sm);
             ui.label(
                 RichText::new(
-                    "Drag an audio or video file onto this window, \
+                    "Open a file with “Open file…” or Ctrl+O, drag one onto this window, \
                      or start mediaplayer with a file path.",
                 )
                 .size(tokens.text.body)
                 .color(palette.text_secondary),
-            );
-            ui.label(
-                RichText::new("A file picker arrives with the libmpv backend (slice 2).")
-                    .size(tokens.text.caption)
-                    .color(palette.text_secondary),
             );
             return;
         };
@@ -62,8 +69,8 @@ pub fn show(ui: &mut Ui, player: &Player) {
             ui.add_space(tokens.spacing.md);
             ui.label(
                 RichText::new(
-                    "Simulated playback: the null backend decodes nothing, \
-                     so there is no sound or picture yet.",
+                    "Simulated playback: libmpv isn't loaded, so there's no sound or picture. \
+                     Settings > Playback backend says how to add it.",
                 )
                 .size(tokens.text.caption)
                 .color(palette.text_secondary),

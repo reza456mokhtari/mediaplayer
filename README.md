@@ -1,8 +1,8 @@
 # mediaplayer
 
 An independent, open-source desktop media player for Windows, written in Rust
-with [egui](https://github.com/emilk/egui). Playback is designed around
-[libmpv](https://mpv.io/), which arrives in slice 2.
+with [egui](https://github.com/emilk/egui). Playback uses
+[libmpv](https://mpv.io/), loaded at runtime.
 
 > **Not affiliated with Microsoft or VideoLAN.** mediaplayer is not Windows Media
 > Player, the Windows 11 Media Player app, or VLC, and none of their makers
@@ -16,10 +16,12 @@ with [egui](https://github.com/emilk/egui). Playback is designed around
 |---|---|
 | 0 | Shell window, navigation with placeholder pages, light/dark design tokens, Now Playing empty state, transport bar |
 | 1 | Player state machine and `PlayerEngine` trait with a **simulated backend**; transport buttons and keyboard drive real state |
+| 2 | Real playback through **libmpv**: video inside the window, audio, seek, volume and mute; **Open file…** and Ctrl+O |
 
-Playback is **simulated** for now. Opening a file checks it and runs a 3:30
-clock, but nothing is decoded (no sound or picture) until the libmpv backend
-lands in slice 2. The roadmap is in [docs/PLAN.md](docs/PLAN.md).
+Without libmpv the app still starts, on the simulated backend (a 3:30 clock, no
+sound or picture), and the error bar and Settings say why. Slice 2 was verified
+on Linux; it hasn't been run on Windows yet (see [NOTES.md](NOTES.md)). The
+roadmap is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Build and run
 
@@ -47,8 +49,8 @@ time. X11 is tested. Wayland support is compiled in but untested.
 
 ### Using it
 
-- Drag a file onto the window, or pass it on the command line. Options are listed
-  by `mediaplayer --help`.
+- Click **Open file…** or press Ctrl+O, drag a file onto the window, or pass it
+  on the command line. Options are listed by `mediaplayer --help`.
 - Set `RUST_LOG=info` to see logs. On Windows only debug builds have a console, so
   `--help` output and logs show up there and not in release builds.
 
@@ -56,6 +58,7 @@ time. X11 is tested. Wayland support is compiled in but untested.
 
 | Key | Action |
 |---|---|
+| Ctrl + O | Open a file |
 | Space | Play / pause |
 | ← / → | Seek 5 s |
 | Shift + ← / → | Seek 30 s |
@@ -63,12 +66,13 @@ time. X11 is tested. Wayland support is compiled in but untested.
 | M | Mute / unmute |
 | S | Stop |
 
-## Playback backend: libmpv (slice 2)
+## Playback backend: libmpv
 
-mediaplayer will load libmpv **at runtime**. Building never needs libmpv
+mediaplayer loads libmpv **at runtime**. Building never needs libmpv
 headers or import libraries, and when the library is missing the app still
 starts (on the simulated backend) and says what's wrong. The design and its
-security hardening are in [ADR 0003](docs/adr/0003-libmpv-runtime-loading.md).
+security hardening are in [ADR 0003](docs/adr/0003-libmpv-runtime-loading.md),
+and how video gets into the window is in [ADR 0004](docs/adr/0004-video-output.md).
 
 ### Windows install notes
 
@@ -88,7 +92,7 @@ the executable.
    `mediaplayer.exe` (`target\release\` or `target\debug\` when developing).
 4. Start mediaplayer. Settings → Playback backend shows which backend is active.
 
-For security, mediaplayer will only load libmpv from its own folder or System32,
+For security, mediaplayer only loads libmpv from its own folder or System32,
 never from the current directory or `PATH`.
 
 ### Linux and macOS
@@ -107,7 +111,8 @@ large runtime plus separate codec plugin sets (see [ADR 0001](docs/adr/0001-ui-s
   added, all rights are reserved by the owner. The choice should take the libmpv
   note below into account.
 - **Rust dependencies:** egui, eframe, egui_kittest, env_logger and log are
-  MIT OR Apache-2.0; winit is Apache-2.0. `cargo tree` lists everything.
+  MIT OR Apache-2.0; winit is Apache-2.0; glow is MIT OR Apache-2.0 OR Zlib;
+  libloading is ISC; rfd is MIT. `cargo tree` lists everything.
 - **Fonts:** egui's bundled fonts: Ubuntu-Light (Ubuntu Font Licence 1.0), Hack
   (MIT), Noto Emoji (SIL OFL 1.1) and emoji-icon-font (MIT). Glyphs missing from
   them are borrowed at runtime from fonts installed on the system; none are bundled.
@@ -124,9 +129,13 @@ large runtime plus separate codec plugin sets (see [ADR 0001](docs/adr/0001-ui-s
 
 ## Current limits
 
-- No real decoding yet (simulated backend). Slice 2.
-- No file picker yet: use drag and drop or the command line. Slice 2.
 - One file at a time; a multi-file drop opens the first file. Play queue in slice 3.
+- No fullscreen, subtitles, track selection or playback speed yet. Slice 5.
+- Video is scaled with `catmull_rom` (a sharp bicubic) instead of libmpv's
+  default `lanczos`, which avoids a libmpv bug that can black out the whole
+  picture ([ADR 0004](docs/adr/0004-video-output.md)). Shrinking a video to well
+  under half its size shows a little more aliasing.
+- Without an audio device, libmpv plays silently instead of failing.
 - egui doesn't shape complex scripts, so Persian and Arabic file names show
   their letters, but unjoined and not right-to-left.
 - The OpenGL renderer needs OpenGL 3 drivers. Some VMs and remote sessions without

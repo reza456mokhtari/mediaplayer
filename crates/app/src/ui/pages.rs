@@ -1,10 +1,11 @@
 //! Placeholder destinations and the Settings page.
 
-use eframe::egui::{RichText, ThemePreference, Ui};
+use eframe::egui::{Label, RichText, ThemePreference, Ui};
 use mediaplayer_core::EngineInfo;
 
 use super::nav::Route;
 use super::widgets;
+use crate::backend::BackendStatus;
 use crate::{APP_NAME, theme};
 
 /// Roadmap page for a destination that a later slice fills in.
@@ -37,7 +38,7 @@ pub fn placeholder(ui: &mut Ui, route: Route) {
     widgets::chip(ui, plan);
 }
 
-pub fn settings(ui: &mut Ui, engine: &EngineInfo) {
+pub fn settings(ui: &mut Ui, engine: &EngineInfo, backend: &BackendStatus) {
     let tokens = theme::tokens(ui);
     let palette = tokens.palette;
     widgets::page_title(ui, "Settings");
@@ -62,10 +63,16 @@ pub fn settings(ui: &mut Ui, engine: &EngineInfo) {
     ui.add_space(tokens.spacing.xl);
     section(ui, "Playback backend");
     ui.label(RichText::new(&engine.name).color(palette.text));
-    if engine.simulated {
+    if let Some(problem) = &backend.problem {
+        ui.add(Label::new(RichText::new(problem).color(palette.danger)).wrap());
+    }
+    if cfg!(windows) {
         ui.label(
-            RichText::new("Nothing is decoded yet; the libmpv backend arrives in slice 2.")
-                .color(palette.text_secondary),
+            RichText::new(
+                "mediaplayer loads libmpv-2.dll only from its own folder or from System32.",
+            )
+            .size(tokens.text.caption)
+            .color(palette.text_secondary),
         );
     }
 

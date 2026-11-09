@@ -18,6 +18,13 @@ pub struct EngineInfo {
     pub simulated: bool,
 }
 
+/// Display size of the current video, in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoSize {
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Something the backend reports asynchronously.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineEvent {
@@ -28,6 +35,10 @@ pub enum EngineEvent {
     },
     /// Current playback position.
     Position(Duration),
+    /// The current file's length changed after it loaded (estimates get refined).
+    DurationChanged(Option<Duration>),
+    /// The current file gained, lost or resized its picture; `None` means audio only.
+    VideoChanged(Option<VideoSize>),
     /// Playback reached the end of the file.
     Ended { id: LoadId },
     /// The file could not be opened or decoded.
