@@ -1,0 +1,84 @@
+//! The Now Playing page.
+
+use eframe::egui::{Label, RichText, Sense, Ui};
+use mediaplayer_core::{PlaybackState, Player};
+
+use super::widgets;
+use crate::theme;
+
+pub fn show(ui: &mut Ui, player: &Player) {
+    let tokens = theme::tokens(ui);
+    let palette = tokens.palette;
+    let height = ui.available_height();
+    ui.vertical_centered(|ui| {
+        ui.add_space((height * 0.06).max(tokens.spacing.md));
+        widgets::artwork(ui, (height * 0.45).clamp(120.0, 300.0), Sense::hover());
+        ui.add_space(tokens.spacing.xl);
+
+        let Some(item) = player.media() else {
+            ui.label(
+                RichText::new("Nothing playing")
+                    .size(tokens.text.title)
+                    .color(palette.text),
+            );
+            ui.add_space(tokens.spacing.sm);
+            ui.label(
+                RichText::new(
+                    "Drag an audio or video file onto this window, \
+                     or start mediaplayer with a file path.",
+                )
+                .size(tokens.text.body)
+                .color(palette.text_secondary),
+            );
+            ui.label(
+                RichText::new("A file picker arrives with the libmpv backend (slice 2).")
+                    .size(tokens.text.caption)
+                    .color(palette.text_secondary),
+            );
+            return;
+        };
+
+        ui.add(
+            Label::new(
+                RichText::new(item.title())
+                    .size(tokens.text.title)
+                    .color(palette.text),
+            )
+            .truncate(),
+        );
+        if let Some(folder) = item.folder() {
+            ui.add(
+                Label::new(
+                    RichText::new(folder)
+                        .size(tokens.text.caption)
+                        .color(palette.text_secondary),
+                )
+                .truncate(),
+            );
+        }
+        ui.add_space(tokens.spacing.md);
+        widgets::chip(ui, state_label(player.state()));
+        if player.engine_info().simulated {
+            ui.add_space(tokens.spacing.md);
+            ui.label(
+                RichText::new(
+                    "Simulated playback: the null backend decodes nothing, \
+                     so there is no sound or picture yet.",
+                )
+                .size(tokens.text.caption)
+                .color(palette.text_secondary),
+            );
+        }
+    });
+}
+
+pub fn state_label(state: PlaybackState) -> &'static str {
+    match state {
+        PlaybackState::Idle => "Idle",
+        PlaybackState::Loading => "Opening…",
+        PlaybackState::Playing => "Playing",
+        PlaybackState::Paused => "Paused",
+        PlaybackState::Stopped => "Stopped",
+        PlaybackState::Ended => "Finished",
+    }
+}

@@ -1,0 +1,33 @@
+[package]
+name = "mediaplayer-app"
+description = "egui desktop shell for mediaplayer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "mediaplayer"
+path = "src/main.rs"
+
+[dependencies]
+eframe.workspace = true
+env_logger.workspace = true
+log.workspace = true
+mediaplayer-core.workspace = true
+
+# Turning off eframe's default features (to drop wgpu) also drops winit's
+# runtime-loaded Wayland support, and accesskit still enables Wayland, so
+# `cargo build` would need libwayland-dev. Same winit version eframe uses.
+[target.'cfg(all(unix, not(any(target_vendor = "apple", target_os = "android"))))'.dependencies]
+winit = { version = "0.30.13", default-features = false, features = [
+    "wayland-csd-adwaita",
+    "wayland-dlopen",
+] }
+
+[dev-dependencies]
+egui_kittest.workspace = true
+
+[lints]
+workspace = true
