@@ -185,6 +185,35 @@ size limits on M3U input and keeping remote playlists from referencing local fil
 - Windows at runtime: loading `libmpv-2.dll`, playback and hardware decoding. CI builds and tests on `windows-latest`, without libmpv.
 - Real GPUs. Only Mesa llvmpipe was available.
 
+### Pre-merge review
+
+- An independent review of `crates/mpv` found a bug: replacing a video with
+  another of the same size could leave the player audio-only for the whole file.
+  - Cause: libmpv coalesces property changes (client.h), so it may never report
+    `dwidth`/`dheight` for the new file, while the player forgets the picture on
+    every open.
+  - Confirmed with a ctypes probe against libmpv 0.37. Reloading the same file
+    after 0.6 s without polling sent no `dwidth`/`dheight` change, but it did send
+    `VIDEO_RECONFIG`, and `dwidth` read as a double returned 1280.
+  - Fix: the engine reads `dwidth`/`dheight` on every `VIDEO_RECONFIG`, and the
+    event mapper reports the size afresh for each file.
+  - TDD: two mapper tests failed (`left: None`), then passed.
+- Reopening the same 720p file in the app through Ctrl+O (zenity under Xvfb):
+  - With the fix, the picture returned in both valid runs.
+  - The one valid pre-fix run showed it too: in the app, the UI usually polls
+    between the two files, so the race is rare there. The unit tests and the probe
+    are the deterministic evidence.
+- Closing the window during playback now has a test; earlier runs were always
+  killed, which skips `on_exit`. MP4 on Now Playing, MP4 in the transport-bar
+  thumbnail, MP3, and closing after a failed Ctrl+O all exit with status 0 in
+  0.1–0.3 s, with no renderer-leak warning.
+- On Linux without a desktop portal or zenity, Ctrl+O fails quietly (it's logged)
+  and the UI stays responsive. The README now says so. rfd loads libdbus at
+  runtime, so the build still needs no system packages.
+- `cargo test --workspace`: 84 passed, 0 failed, 4 ignored. The 4 ignored libmpv
+  tests pass when run. Clippy `-D warnings` passes for Linux and for
+  `x86_64-pc-windows-msvc`.
+
 ### Improve before slice 3
 
 - Keep libmpv's render loop serviced whenever a video file is active. Until the
@@ -196,3 +225,14 @@ size limits on M3U input and keeping remote playlists from referencing local fil
 - Report the uninitialised scaler padding upstream (mpv `video/out/gpu/video.c`),
   then version-gate the workaround.
 - Run the ignored libmpv tests on Windows CI against a pinned, checksummed `libmpv-2.dll`.
+- `MpvEngine::create_video_output`, `VideoOutput::paint` and `VideoOutput::destroy`
+  are safe functions with OpenGL requirements the compiler can't check:
+  - the creating context must be current;
+  - `get_proc_address` must return real GL functions.
+
+  Breaking them is undefined behaviour (render.h). The app meets them. Marking them
+  `unsafe` would push `unsafe` into the app, so instead move the egui paint
+  callback and the context handling into `crates/mpv`.
+- The libmpv callback wrappers don't catch panics, so a panicking closure aborts
+  the process. That's defined behaviour, but abrupt. Add `catch_unwind` along with
+  the change above.

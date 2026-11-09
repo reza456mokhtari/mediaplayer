@@ -27,6 +27,8 @@ pub(crate) enum RawEvent {
         entry: i64,
     },
     FileLoaded,
+    /// The video output was reconfigured: new size, format or filters, or no video.
+    VideoReconfig,
     EndFile {
         entry: i64,
         reason: c_int,
@@ -66,6 +68,8 @@ pub(crate) struct EventMapper {
 impl EventMapper {
     pub(crate) fn start_file(&mut self, entry: i64) {
         self.current = Some(entry);
+        // The player forgets the picture whenever a file opens; report it afresh.
+        self.video = None;
     }
 
     /// `duration` is read from libmpv when FILE_LOADED arrives.
@@ -116,19 +120,37 @@ impl EventMapper {
                 } else {
                     self.height = dimension;
                 }
-                let video = self.width.zip(self.height).and_then(|(width, height)| {
-                    Some(VideoSize {
-                        width: u32::try_from(width).ok()?,
-                        height: u32::try_from(height).ok()?,
-                    })
-                });
-                (video != self.video).then(|| {
-                    self.video = video;
-                    EngineEvent::VideoChanged(video)
-                })
+                self.publish_video()
             }
             _ => None,
         }
+    }
+
+    /// `width` and `height` are libmpv's current `dwidth` and `dheight`, read when
+    /// VIDEO_RECONFIG arrives. libmpv coalesces property changes (client.h), so a
+    /// file replaced by one of the same size may never report them as changed.
+    pub(crate) fn video_reconfigured(
+        &mut self,
+        width: Option<i64>,
+        height: Option<i64>,
+    ) -> Option<EngineEvent> {
+        self.width = width.filter(|&pixels| pixels > 0);
+        self.height = height.filter(|&pixels| pixels > 0);
+        self.publish_video()
+    }
+
+    /// Reports the picture size when it differs from what was last reported.
+    fn publish_video(&mut self) -> Option<EngineEvent> {
+        let video = self.width.zip(self.height).and_then(|(width, height)| {
+            Some(VideoSize {
+                width: u32::try_from(width).ok()?,
+                height: u32::try_from(height).ok()?,
+            })
+        });
+        (video != self.video).then(|| {
+            self.video = video;
+            EngineEvent::VideoChanged(video)
+        })
     }
 }
 
@@ -284,6 +306,46 @@ mod tests {
             Some(VideoChanged(None))
         );
         assert_eq!(mapper.property(property::HEIGHT, PropertyValue::None), None);
+    }
+
+    const HD: VideoSize = VideoSize {
+        width: 1280,
+        height: 720,
+    };
+
+    fn playing_hd(mapper: &mut EventMapper) {
+        mapper.start_file(1);
+        mapper.property(property::WIDTH, PropertyValue::Int(1280));
+        mapper.property(property::HEIGHT, PropertyValue::Int(720));
+    }
+
+    #[test]
+    fn each_file_reports_its_video_size_even_when_unchanged() {
+        let mut mapper = EventMapper::default();
+        playing_hd(&mut mapper);
+        mapper.end_file(1, STOP, String::new);
+        mapper.start_file(2);
+        assert_eq!(
+            mapper.property(property::HEIGHT, PropertyValue::Int(720)),
+            Some(VideoChanged(Some(HD)))
+        );
+    }
+
+    #[test]
+    fn video_reconfig_reports_the_current_size() {
+        let mut mapper = EventMapper::default();
+        playing_hd(&mut mapper);
+        // A same-sized replacement: libmpv sends no dwidth/dheight change at all.
+        mapper.start_file(2);
+        assert_eq!(
+            mapper.video_reconfigured(Some(1280), Some(720)),
+            Some(VideoChanged(Some(HD)))
+        );
+        assert_eq!(mapper.video_reconfigured(Some(1280), Some(720)), None);
+        assert_eq!(
+            mapper.video_reconfigured(None, Some(720)),
+            Some(VideoChanged(None))
+        );
     }
 
     #[test]

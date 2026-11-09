@@ -224,6 +224,7 @@ unsafe fn decode(event: &ffi::Event) -> Option<RawEvent> {
         ffi::EVENT_NONE => return None,
         ffi::EVENT_SHUTDOWN => RawEvent::Shutdown,
         ffi::EVENT_FILE_LOADED => RawEvent::FileLoaded,
+        ffi::EVENT_VIDEO_RECONFIG => RawEvent::VideoReconfig,
         ffi::EVENT_START_FILE if !data.is_null() => {
             // SAFETY: START_FILE carries an mpv_event_start_file.
             let start = unsafe { &*data.cast::<ffi::EventStartFile>() };

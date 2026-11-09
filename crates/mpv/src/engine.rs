@@ -178,6 +178,12 @@ impl MpvEngine {
                 let duration = self.handle.get_double(c"duration");
                 out.extend(self.mapper.file_loaded(duration));
             }
+            RawEvent::VideoReconfig => {
+                // libmpv converts these int64 properties to double on request.
+                let pixels = |name: &CStr| self.handle.get_double(name).map(|value| value as i64);
+                let (width, height) = (pixels(c"dwidth"), pixels(c"dheight"));
+                out.extend(self.mapper.video_reconfigured(width, height));
+            }
             RawEvent::EndFile {
                 entry,
                 reason,
