@@ -1,8 +1,8 @@
 //! UI-agnostic core of mediaplayer.
 //!
 //! - [`Player`]: the playback state machine every frontend drives with [`PlayerCommand`]s.
-//! - [`PlayerEngine`]: the backend boundary (libmpv arrives in slice 2).
-//! - [`NullEngine`]: a simulated backend for development and tests.
+//! - [`PlayerEngine`]: the backend boundary; `mediaplayer-mpv` implements it with libmpv.
+//! - [`NullEngine`]: a simulated backend for development, tests, and when libmpv is missing.
 
 pub mod engine;
 pub mod media;

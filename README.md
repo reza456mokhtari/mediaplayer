@@ -45,7 +45,9 @@ every dependency is a Rust crate that cargo fetches.
 ### Linux (development)
 
 Same commands. At runtime it needs OpenGL drivers (Mesa); nothing extra at build
-time. X11 is tested. Wayland support is compiled in but untested.
+time. X11 is tested. Wayland support is compiled in but untested. The Open dialog
+uses the desktop portal (`xdg-desktop-portal`, which GNOME and KDE run) or falls
+back to `zenity`; without either, open files by drag and drop or the command line.
 
 ### Using it
 
